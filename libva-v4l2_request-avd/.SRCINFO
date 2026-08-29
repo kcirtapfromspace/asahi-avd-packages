@@ -1,0 +1,18 @@
+pkgbase = libva-v4l2_request-avd
+	pkgdesc = VA-API driver for V4L2 stateless decoders, with Apple Video Decoder (AVD) support
+	pkgver = 1.3
+	pkgrel = 1
+	url = https://github.com/sofus13/libva-v4l2_request
+	install = libva-v4l2_request-avd.install
+	arch = aarch64
+	license = GPL-3.0-or-later
+	makedepends = meson
+	makedepends = libdrm
+	depends = glibc
+	depends = libva
+	provides = libva-v4l2_request
+	conflicts = libva-v4l2_request
+	source = libva-v4l2_request-avd-1.3.tar.gz::https://github.com/sofus13/libva-v4l2_request/archive/refs/tags/1.3.tar.gz
+	sha256sums = 3670a1712f9f0a5a61bd44a781eba81dd9b2e0fd8271417ca8a9fbbed9dccfe9
+
+pkgname = libva-v4l2_request-avd

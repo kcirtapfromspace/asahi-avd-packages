@@ -1,0 +1,18 @@
+pkgbase = avd-fw
+	pkgdesc = Open replacement firmware for the Apple Video Decoder (AVD) on Apple Silicon
+	pkgver = 0.1
+	pkgrel = 1
+	url = https://github.com/AsahiLinux/avd-fw
+	arch = any
+	license = MIT
+	makedepends = meson
+	makedepends = clang
+	makedepends = llvm
+	options = !strip
+	options = !debug
+	options = !buildflags
+	options = !lto
+	source = avd-fw-0.1.tar.gz::https://github.com/AsahiLinux/avd-fw/archive/refs/tags/v0.1.tar.gz
+	sha256sums = 2e131244275cb15c94243e41eec8a2a665ec895cfe3a818181549db991e62c67
+
+pkgname = avd-fw

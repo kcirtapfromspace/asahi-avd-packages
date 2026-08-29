@@ -43,6 +43,14 @@ build() {
 package() {
   meson install -C build --destdir "$pkgdir"
 
+  # libva picks its driver from the DRM driver name of the render node, which
+  # on Apple Silicon is "asahi", so it looks for asahi_drv_video.so. Nothing
+  # else ships that name (mesa provides no VA driver for asahi), so aliasing it
+  # here makes every VA-API application find the decoder with no environment
+  # variable at all. If mesa ever ships its own asahi_drv_video.so this will
+  # collide and pacman will say so at install time.
+  ln -sf v4l2_request_drv_video.so "$pkgdir/usr/lib/dri/asahi_drv_video.so"
+
   install -Dm644 "libva-v4l2_request-$pkgver/COPYING" \
     "$pkgdir/usr/share/licenses/$pkgname/COPYING"
   install -Dm644 "libva-v4l2_request-$pkgver/README" \

@@ -34,27 +34,66 @@ does not use weighted prediction.
 
 ## The H.264 weighted-prediction defect
 
-Bisected with x264, 1280x720, profile Main, `-bf 3`, everything else held
-constant:
+**Root cause: AVD ignores `V4L2_CID_STATELESS_H264_PRED_WEIGHTS` entirely.**
 
-| encoder settings | luma PSNR |
-|---|---|
-| `weightp=0 b-pyramid=none` | `inf` |
-| `weightp=2 b-pyramid=none` | 53.95 dB |
-| `weightp=0 b-pyramid=normal` | `inf` |
-| `weightp=2 b-pyramid=normal` | 54.12 dB |
+The shim is not at fault. `codec_h264.c` populates the control from VA-API and
+submits it correctly: the values arrive right, the struct layout matches
+`v4l2_ctrl_h264_pred_weights`, the PPS flags gate it correctly, and AVD reports
+`h264_decode_mode: 0 (Slice-Based)` so the control really is appended.
 
-`weightp` alone decides it; B-pyramid is irrelevant. Narrowed further:
-all-intra (`-g 1`) is exact, and I+P with no B-frames is exact, so the error
-needs both inter prediction and weighting to appear. Chroma stays bit-exact in
-every case, which points at the luma side of the `pred_weight_table` — carried
-over the V4L2 stateless interface as `V4L2_CID_STATELESS_H264_PRED_WEIGHTS`.
+Demonstrated by instrumenting the shim with three env-gated variants and
+comparing raw output:
 
-The error is small — 54 dB is visually imperceptible — and it is deterministic
-rather than drifting without bound. But it is non-conformant, and x264 enables
-`weightp` by default, so ordinary encodes hit it.
+| variant | luma PSNR vs software | vs "weights sent" |
+|---|---|---|
+| weights sent, as upstream does | 54.759314 | — |
+| `PRED_WEIGHTS` control suppressed entirely | 54.759314 | **byte-identical** |
+| all 32 L0 offsets sabotaged to `-64` | 54.759314 | **byte-identical** |
 
-Not yet root-caused to the shim, the kernel driver, or the firmware.
+Feeding the hardware deliberately absurd weights changes nothing at all. It
+never reads them. (Reproduced independently after the diagnostic build was
+reverted, on a pristine tree, at the same 54.759314.)
+
+### Why chroma escapes
+
+Not a luma-specific hardware bug — an artefact of what the encoder emits.
+Instrumenting every slice carrying a weight table showed one pattern, 25 times:
+
+```
+luma_nn=1 chroma_nn=0 ldenom=0 lw=[1,1] lo=[0,-1]
+```
+
+`chroma_nn=0` — x264's `weightp` weights **luma only**, leaving chroma weights
+neutral. So when the table is dropped, only luma can differ. A stream that
+weighted chroma would break there too.
+
+The weighting here is `luma_log2_weight_denom=0, weight=1, offset=-1`. Per
+H.264 §8.4.2.3.2, `logWD == 0` takes the `pred = Clip1(ref*w + o)` branch, so
+correct output is `ref - 1` and AVD produces `ref`. A 1-LSB error confined to
+macroblocks referencing the weighted entry lands at about 54 dB, which is what
+is measured.
+
+### It is content-dependent
+
+An earlier framing here — "x264 enables `weightp` by default, so ordinary
+encodes hit it" — was too strong. A fade clip carrying 29 non-neutral weight
+tables decoded **bit-exact**. The trigger is not "the stream uses weighted
+prediction" but "a macroblock actually references a weighted reference index".
+Many `weightp` streams will decode correctly.
+
+### Where the fix belongs
+
+In the AVD kernel driver or the `avd-fw` firmware, whichever is meant to
+consume the control — not in `libva-v4l2_request`, which already does the right
+thing. Which of the two is unresolved: this machine has no kernel source tree
+installed, and the `avd_h264.c` paths tried on the Asahi GitHub mirror 404.
+`apple-avd.ko` does carry `v4l2_ctrl_h264_pred_weights` and `luma_weight` in
+its BTF type data, but that only proves the struct is in its type universe, not
+that anything reads it.
+
+Next step is to find `avd_h264.c` in the Asahi tree and check whether the
+request-completion path fetches the control and marshals it into the firmware
+command. If it does, the defect is in the firmware.
 
 ## VP9 10-bit
 

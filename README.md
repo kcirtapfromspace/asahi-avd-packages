@@ -120,9 +120,18 @@ the stream uses weighted prediction, at which point luma diverges by about
 | `weightp=0` | `inf` (bit-exact) |
 | `weightp=2` | 53.95 dB |
 
-x264 enables `weightp` by default, so ordinary encodes are affected. The error
-is visually imperceptible and deterministic, but non-conformant. Full
-bisection and method in [`bench/VALIDATION.md`](bench/VALIDATION.md).
+Root-caused: **AVD ignores `V4L2_CID_STATELESS_H264_PRED_WEIGHTS` entirely.**
+Suppressing the control, or filling it with deliberately absurd values, produces
+byte-identical output to sending it correctly — the hardware never reads it. The
+shim submits it properly, so the fix belongs in the kernel driver or the
+firmware.
+
+Chroma escapes only because x264's `weightp` weights luma and leaves chroma
+neutral. The effect is content-dependent: it needs a macroblock that actually
+references a weighted reference index, so many `weightp` streams still decode
+bit-exact. The error is 1 LSB, visually imperceptible, deterministic — but
+non-conformant. Full method and proof in
+[`bench/VALIDATION.md`](bench/VALIDATION.md).
 
 ### Known gap: `--vo=dmabuf-wayland`
 

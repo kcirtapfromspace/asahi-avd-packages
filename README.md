@@ -108,6 +108,22 @@ underlying problem showing up as a function of compressed frame size.
 HEVC and VP9 have no equivalent failure, and between them cover a large share
 of modern streaming video.
 
+### H.264 weighted prediction is not bit-exact
+
+H.264 decoding is specified to be bit-exact. Comparing hardware output against
+libavcodec frame by frame, HEVC and VP9 pass exactly — and so does H.264, until
+the stream uses weighted prediction, at which point luma diverges by about
+54 dB while chroma stays exact:
+
+| encoder settings (x264, profile Main, -bf 3) | luma PSNR |
+|---|---|
+| `weightp=0` | `inf` (bit-exact) |
+| `weightp=2` | 53.95 dB |
+
+x264 enables `weightp` by default, so ordinary encodes are affected. The error
+is visually imperceptible and deterministic, but non-conformant. Full
+bisection and method in [`bench/VALIDATION.md`](bench/VALIDATION.md).
+
 ### Known gap: `--vo=dmabuf-wayland`
 
 `--vo=gpu` (mpv's default) and `--hwdec=vaapi-copy` both work. The fully

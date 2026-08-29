@@ -120,11 +120,13 @@ the stream uses weighted prediction, at which point luma diverges by about
 | `weightp=0` | `inf` (bit-exact) |
 | `weightp=2` | 53.95 dB |
 
-Root-caused: **AVD ignores `V4L2_CID_STATELESS_H264_PRED_WEIGHTS` entirely.**
-Suppressing the control, or filling it with deliberately absurd values, produces
-byte-identical output to sending it correctly — the hardware never reads it. The
-shim submits it properly, so the fix belongs in the kernel driver or the
-firmware.
+**AVD ignores `V4L2_CID_STATELESS_H264_PRED_WEIGHTS`.** Suppressing the control,
+or filling it with deliberately absurd values, produces byte-identical output to
+sending it correctly. The shim submits it properly and the kernel driver
+marshals it correctly — both were instrumented and cleared — and the firmware is
+not in this path at all, since the command stream is written straight to
+hardware instruction slots. Remaining question is whether the driver emits the
+instructions at runtime; an instrumented module is built to settle it.
 
 Chroma escapes only because x264's `weightp` weights luma and leaves chroma
 neutral. The effect is content-dependent: it needs a macroblock that actually

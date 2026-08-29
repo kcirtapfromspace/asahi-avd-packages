@@ -83,17 +83,35 @@ Many `weightp` streams will decode correctly.
 
 ### Where the fix belongs
 
-In the AVD kernel driver or the `avd-fw` firmware, whichever is meant to
-consume the control — not in `libva-v4l2_request`, which already does the right
-thing. Which of the two is unresolved: this machine has no kernel source tree
-installed, and the `avd_h264.c` paths tried on the Asahi GitHub mirror 404.
-`apple-avd.ko` does carry `v4l2_ctrl_h264_pred_weights` and `luma_weight` in
-its BTF type data, but that only proves the struct is in its type universe, not
-that anything reads it.
+**Not in the firmware, and not in the shim.** Both were checked and cleared:
 
-Next step is to find `avd_h264.c` in the Asahi tree and check whether the
-request-completion path fetches the control and marshals it into the firmware
-command. If it does, the defect is in the firmware.
+- *Shim, control gating.* Instrumenting every slice of the reproducer shows 26
+  slices where `V4L2_H264_CTRL_PRED_WEIGHTS_REQUIRED` evaluates true, so
+  `V4L2_H264_PPS_FLAG_WEIGHTED_PRED` is set, the slice type is P, and the
+  driver's `if (!pred_weight) return;` does not fire.
+- *Shim, reference count.* 24 of the 25 slices carrying a non-neutral table
+  report `num_ref_idx_l0_active_minus1 = 3`, so the driver's loop covers
+  indices 0-3 and index 1 — where the `offset = -1` lives — is comfortably in
+  bounds. The shim's documented `num_ref_idx` weakness does not apply: it takes
+  the value straight from the VA slice parameters, and only the unrelated PPS
+  *default* fields are guessed.
+- *Firmware.* `push()` resolves to a `writel()` into a hardware instruction
+  slot, so the command stream goes to fixed-function hardware rather than
+  through the Cortex-M3 core that `avd-fw` runs on. `avd-fw/src` contains no
+  weight or offset handling at all. The firmware is not in this path.
+
+The opcode encoding is also correct: `AVD_OP_OFFSETS_OFFSET` is `GENMASK(15,0)`,
+so `FIELD_PREP` renders `-1` as `0xffff`, proper 16-bit two's complement.
+
+So the driver marshals the weights and the hardware appears not to honour them.
+One gap remains: whether the driver *actually emits* those instructions at
+runtime. Everything static says it should. The driver carries a `DEBUG_INST`
+tracer that logs every instruction with its label, and an instrumented
+`apple-avd.ko` matching this kernel's vermagic has been built to settle it. If
+`slc_luma_weights` / `slc_luma_offsets` never appear, the bug is in
+`stream_weights()` and is kernel-patchable; if they do appear, the hardware
+ignores correct instructions and the honest fix is for the driver to decline
+weighted slices rather than decode them wrongly.
 
 ## VP9 10-bit
 
@@ -137,6 +155,19 @@ that, because the code is not in the binary.
 So on Arch Linux ARM today the practical beneficiaries are mpv, ffmpeg and
 GStreamer. Getting `use_vaapi=true` into the ALARM Chromium build is a separate
 and probably higher-impact contribution than anything in this repo.
+
+It is worse than a missing build flag. ALARM's PKGBUILD sets
+`use_vaapi=false` **and** `use_v4l2_codec=true` — a deliberate choice, noted in
+the file header as "disable vaapi, enable v4l2". The V4L2 stateless stack really
+is compiled in (`V4L2StatelessVideoDecoderBackend`,
+`V4L2VideoDecoderBackendStateless` are all present in the binary), and V4L2
+stateless is exactly what AVD speaks. But no Chromium process ever opens
+`/dev/video*`, with or without
+`--enable-features=AcceleratedVideoDecodeLinuxGL,AcceleratedVideoDecodeLinuxZeroCopyGL`
+and `--ignore-gpu-blocklist`. The path appears to be reachable only on ChromeOS.
+
+So Chromium on Arch Linux ARM currently has no working hardware decode route at
+all: VA-API compiled out, V4L2 compiled in but unreachable.
 
 Firefox (`extra/firefox` 154.0.1) is not installed here and remains untested;
 it is a separate question, and its RDD sandbox needs `MOZ_DISABLE_RDD_SANDBOX=1`

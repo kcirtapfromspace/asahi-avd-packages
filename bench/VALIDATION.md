@@ -81,37 +81,31 @@ tables decoded **bit-exact**. The trigger is not "the stream uses weighted
 prediction" but "a macroblock actually references a weighted reference index".
 Many `weightp` streams will decode correctly.
 
-### Where the fix belongs
+### Root cause and fix
 
-**Not in the firmware, and not in the shim.** Both were checked and cleared:
+**Fixed.** See [`patches/0001-avd-h264-weighted-pred.patch`](../patches/).
 
-- *Shim, control gating.* Instrumenting every slice of the reproducer shows 26
-  slices where `V4L2_H264_CTRL_PRED_WEIGHTS_REQUIRED` evaluates true, so
-  `V4L2_H264_PPS_FLAG_WEIGHTED_PRED` is set, the slice type is P, and the
-  driver's `if (!pred_weight) return;` does not fire.
-- *Shim, reference count.* 24 of the 25 slices carrying a non-neutral table
-  report `num_ref_idx_l0_active_minus1 = 3`, so the driver's loop covers
-  indices 0-3 and index 1 — where the `offset = -1` lives — is comfortably in
-  bounds. The shim's documented `num_ref_idx` weakness does not apply: it takes
-  the value straight from the VA slice parameters, and only the unrelated PPS
-  *default* fields are guessed.
-- *Firmware.* `push()` resolves to a `writel()` into a hardware instruction
-  slot, so the command stream goes to fixed-function hardware rather than
-  through the Cortex-M3 core that `avd-fw` runs on. `avd-fw/src` contains no
-  weight or offset handling at all. The firmware is not in this path.
+`stream_weights()` applied `weighted_bipred_idc` unconditionally, setting the
+implicit-bipred header flag and ORing `LUMA(5)|CHROMA(5)` over the real
+denominators. But `weighted_bipred_idc` governs **B slices only**; P slices take
+their weighting from `weighted_pred_flag` and carry an explicit
+`pred_weight_table`. On a P slice in a stream whose PPS also enables implicit
+bi-prediction for B slices, the driver told the hardware to ignore the very
+table it then sent, and advertised denominator 5 for weights computed at
+denominator 0. The original code carried a `TODO` questioning exactly those two
+checks.
 
-The opcode encoding is also correct: `AVD_OP_OFFSETS_OFFSET` is `GENMASK(15,0)`,
-so `FIELD_PREP` renders `-1` as `0xffff`, proper 16-bit two's complement.
+Everything else was cleared first: the shim populates the control correctly, the
+driver marshals it correctly (instrumentation showed 22 luma weight/offset pairs
+emitted with correct values across 50 slices), and the firmware is not in this
+path at all — `push()` is a `writel()` into a hardware instruction slot.
 
-So the driver marshals the weights and the hardware appears not to honour them.
-One gap remains: whether the driver *actually emits* those instructions at
-runtime. Everything static says it should. The driver carries a `DEBUG_INST`
-tracer that logs every instruction with its label, and an instrumented
-`apple-avd.ko` matching this kernel's vermagic has been built to settle it. If
-`slc_luma_weights` / `slc_luma_offsets` never appear, the bug is in
-`stream_weights()` and is kernel-patchable; if they do appear, the hardware
-ignores correct instructions and the honest fix is for the driver to decline
-weighted slices rather than decode them wrongly.
+Gating both on `slice_type == V4L2_H264_SLICE_TYPE_B`:
+
+| stream | before | after |
+|---|---|---|
+| H.264 weighted P | y:54.759314 | **y:inf** |
+| H.264 no weighted P | y:inf | y:inf |
 
 ## VP9 10-bit
 

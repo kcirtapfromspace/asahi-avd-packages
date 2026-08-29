@@ -108,7 +108,7 @@ underlying problem showing up as a function of compressed frame size.
 HEVC and VP9 have no equivalent failure, and between them cover a large share
 of modern streaming video.
 
-### H.264 weighted prediction is not bit-exact
+### H.264 weighted prediction (fixed — kernel patch)
 
 H.264 decoding is specified to be bit-exact. Comparing hardware output against
 libavcodec frame by frame, HEVC and VP9 pass exactly — and so does H.264, until
@@ -120,13 +120,12 @@ the stream uses weighted prediction, at which point luma diverges by about
 | `weightp=0` | `inf` (bit-exact) |
 | `weightp=2` | 53.95 dB |
 
-**AVD ignores `V4L2_CID_STATELESS_H264_PRED_WEIGHTS`.** Suppressing the control,
-or filling it with deliberately absurd values, produces byte-identical output to
-sending it correctly. The shim submits it properly and the kernel driver
-marshals it correctly — both were instrumented and cleared — and the firmware is
-not in this path at all, since the command stream is written straight to
-hardware instruction slots. Remaining question is whether the driver emits the
-instructions at runtime; an instrumented module is built to settle it.
+**Root-caused and fixed** — see [`patches/`](patches/). The driver applied
+`weighted_bipred_idc`, which governs B slices only, to P slices as well: that
+set the implicit-bipred flag (telling the hardware to disregard the explicit
+weight table) and overrode the real weight denominators. Gating it on
+`slice_type == B` restores bit-exact decoding, verified by per-frame PSNR
+against libavcodec, with a non-weighted stream as a regression control.
 
 Chroma escapes only because x264's `weightp` weights luma and leaves chroma
 neutral. The effect is content-dependent: it needs a macroblock that actually

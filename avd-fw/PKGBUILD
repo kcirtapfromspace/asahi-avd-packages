@@ -41,6 +41,10 @@ build() {
 package() {
   meson install -C build --destdir "$pkgdir"
 
+  # meson installs custom_target outputs 0755; these are firmware blobs, not
+  # programs, and every other firmware file on the system is 0644.
+  chmod 644 "$pkgdir"/usr/lib/firmware/apple/*.bin
+
   install -Dm644 "$pkgname-$pkgver/LICENSE" \
     "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

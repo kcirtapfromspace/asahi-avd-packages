@@ -196,6 +196,36 @@ reset path reported zero errors, and two simultaneous decoders on the one device
 — an H.264 and an HEVC stream at once — both ran with hardware decode and no
 errors.
 
+## Installed-package behaviour
+
+Validated against real `pacman -U` installs rather than a build tree, which is
+what every earlier test used.
+
+`avd-fw` reinstalls as `Architecture: any` with the firmware at `0644`, and the
+decoder stays healthy across the reinstall.
+
+The shim installs with **no file conflicts**, and then:
+
+```console
+$ env -u LIBVA_DRIVERS_PATH -u LIBVA_DRIVER_NAME vainfo
+libva-v4l2request: detected 1 Request API decoder
+vainfo: Driver version: v4l2-request
+      VAProfileH264ConstrainedBaseline / Main / High : VAEntrypointVLD
+      VAProfileHEVCMain / HEVCMain10                 : VAEntrypointVLD
+      VAProfileVP9Profile0 / VP9Profile2             : VAEntrypointVLD
+```
+
+**No environment variables at all** — the packaged `asahi_drv_video.so` alias is
+picked up from `/usr/lib/dri`. Run before the shim was installed, the same
+command fails with `vaInitialize failed with error code -1`, which confirms
+there is no accidental fallback making things appear to work when the package is
+absent.
+
+One defect found and fixed by doing this: the `.install` file had been edited
+after the last package build, so the shipped package still printed the old
+message telling users to set `LIBVA_DRIVER_NAME`. The functional artifact was
+correct; only the guidance was stale.
+
 ## Not yet validated
 
 Listed so nobody mistakes this page for a clean bill of health.
@@ -205,10 +235,6 @@ Listed so nobody mistakes this page for a clean bill of health.
 - **Real-world content.** Every clip above is synthetic `testsrc2`. No real
   camera footage, film grain, interlacing, or varied GOP structures.
 - **Long-running stability.** Nothing here ran longer than 60 seconds.
-- **Installed-package behaviour.** All testing used `LIBVA_DRIVERS_PATH`
-  against a build tree; the packaged `asahi_drv_video.so` alias and the
-  `conflicts` with the stock `libva-v4l2_request` have not been exercised
-  through a real `pacman -U`.
 - **Reboot persistence.** `avd-fw` is expected to be picked up at boot, but
   this machine has not been rebooted since installing it.
 - **Clean-chroot build.** Both packages build on a developer machine with a

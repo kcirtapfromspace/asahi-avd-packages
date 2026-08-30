@@ -226,17 +226,57 @@ after the last package build, so the shipped package still printed the old
 message telling users to set `LIBVA_DRIVER_NAME`. The functional artifact was
 correct; only the guidance was stale.
 
+## Real-world content
+
+Synthetic `testsrc2` is not evidence about real video, so the same checks were
+run on actual encodes (Big Buck Bunny, Jellyfish; 1080p, real motion and grain,
+varied GOP), through the **installed** package with no environment variables:
+
+| Stream | Result | Correctness |
+|---|---|---|
+| H.264 High, 4 Mbps | **fails**, falls back to software (38 errors) | — |
+| H.264 High, 24 Mbps | **fails**, falls back to software (64 errors) | — |
+| HEVC Main | clean | **bit-exact** |
+| VP9 Profile 0 | clean | **bit-exact** |
+
+Both real H.264 clips are **High profile**, because that is what real-world
+H.264 uses. So in practice H.264 hardware decode is unusable on this stack
+today, while HEVC and VP9 work and are bit-exact on real footage.
+
+## 10-bit
+
+**VP9 Profile 2 (10-bit) is bit-exact.** The earlier inconclusive result was an
+artefact of the test, not a defect: both sides had been forced through an 8-bit
+NV12 conversion that rounds differently. Compared natively at P010 it is
+`y:inf u:inf v:inf` with zero decode errors.
+
+Worth knowing: `v4l2-ctl --list-formats` reports NV12 only, but that queries an
+idle device before codec controls are set, and the driver configures the CAPTURE
+queue lazily. For a 10-bit stream the shim negotiates **P010**.
+
+One loose end: decoding the 10-bit clip unconstrained yields 116 frames from
+hardware against 120 from software, with no errors reported. Limited to the same
+count the output is identical, so this looks like frames dropped at end-of-stream
+flush rather than corruption — but it has not been chased down.
+
+**HEVC Main10 remains untested.** Neither the local x265 nor Arch Linux ARM's is
+built with 10-bit support, so no Main10 stream could be produced, and no ready
+sample was found.
+
+## Clean-environment build
+
+`makechrootpkg` needs root, so the equivalent was done in a pristine Arch Linux
+ARM container holding only base-devel (170 packages). Both packages build with
+`makepkg -s` from **their declared dependencies alone**, producing
+`avd-fw-0.1-1-any.pkg.tar.xz` and
+`libva-v4l2_request-avd-1.3-1-aarch64.pkg.tar.xz`. No undeclared `makedepends`.
+
 ## Not yet validated
 
 Listed so nobody mistakes this page for a clean bill of health.
 
 - **Firefox.** Untested; not installed here. (Chromium is now tested — see
   above.)
-- **Real-world content.** Every clip above is synthetic `testsrc2`. No real
-  camera footage, film grain, interlacing, or varied GOP structures.
 - **Long-running stability.** Nothing here ran longer than 60 seconds.
 - **Reboot persistence.** `avd-fw` is expected to be picked up at boot, but
   this machine has not been rebooted since installing it.
-- **Clean-chroot build.** Both packages build on a developer machine with a
-  populated toolchain; neither has been built with `makechrootpkg`, which is
-  what would catch a missing `makedepends`.

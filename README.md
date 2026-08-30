@@ -87,13 +87,15 @@ H.264 works, but only with the patches in [`patches/`](patches/). Without them
 it is unusable: High profile falls back to software, and any real 1080p keyframe
 stalls the decoder outright. HEVC and VP9 need none of them.
 
-| patch | fixes |
-|---|---|
-| `0001` weighted prediction | luma off by ~54 dB when a stream uses weighted P |
-| `0002` High profile | decode stalls; High is what all real H.264 uses |
-| `0003` t8103 FIFO mask | any frame above ~1 MiB of instructions stalls — every real keyframe |
+| patch | fixes | still needed on `asahi-wip`? |
+|---|---|---|
+| `0001` weighted prediction | luma off by ~54 dB when a stream uses weighted P | no — fixed upstream by [#581](https://github.com/AsahiLinux/linux/pull/581) |
+| `0002` High profile | decode stalls; High is what all real H.264 uses | no — #581's buffer work removed the stall |
+| `0003` t8103 FIFO mask | any frame above ~1 MiB of instructions stalls — every real keyframe | **yes** — submitted as [#585](https://github.com/AsahiLinux/linux/pull/585) |
 
-All three verified bit-exact against libavcodec, with HEVC and VP9 unregressed.
+All three are needed and verified bit-exact on the shipped `linux-asahi` 7.1.6.
+Re-tested against current `asahi-wip`, only `0003` still changes anything; the
+other two were fixed upstream independently while this was being worked on.
 Full root causes, measurements and falsified hypotheses in
 [`patches/README.md`](patches/README.md) and
 [`bench/VALIDATION.md`](bench/VALIDATION.md).

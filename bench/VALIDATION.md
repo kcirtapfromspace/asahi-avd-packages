@@ -298,6 +298,12 @@ test.
 
 ## Large H.264 frames stalled the decoder — FIXED
 
+> Re-verified against upstream `asahi-wip` at ccce11ae after PR #581 landed:
+> this fix is still required there, 0/10 before and 10/10 after, and was
+> submitted as [AsahiLinux/linux#585](https://github.com/AsahiLinux/linux/pull/585).
+> The other two H.264 fixes documented here apply to the shipped `linux-asahi`
+> 7.1.6 but are redundant on `asahi-wip` — see [`patches/README.md`](../patches/README.md).
+
 See [`patches/0003-avd-hw-t8103-vp-insn-fifo-mask.patch`](../patches/).
 
 `t8103_configure_stream()` programmed the VP instruction FIFO limit to `0x100000`

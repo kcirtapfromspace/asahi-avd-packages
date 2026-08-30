@@ -1,5 +1,38 @@
 # Kernel patches
 
+**Which of these you need depends on your kernel.** They were developed against
+the `asahi` branch, which is what `linux-asahi` 7.1.6 ships. While that was
+happening, upstream's `asahi-wip` branch moved: [PR #581][581] landed a batch of
+AVD buffer-sizing work on 2026-08-29.
+
+Re-tested against `asahi-wip` at ccce11ae, each fix in isolation:
+
+| fix | on shipped `linux-asahi` 7.1.6 | on current `asahi-wip` |
+|---|---|---|
+| `0001` weighted prediction | needed, verified | **already fixed upstream** by #581 |
+| `0002` High profile scaling | needed, verified | **no longer changes anything** |
+| `0003` t8103 FIFO mask | needed, verified | **still needed** — submitted as [#585][585] |
+
+So on a current development kernel only `0003` applies. On the kernel Arch Linux
+ARM actually ships today, all three do.
+
+[581]: https://github.com/AsahiLinux/linux/pull/581
+[585]: https://github.com/AsahiLinux/linux/pull/585
+
+## Credit where it is due
+
+The weighted-prediction bug was found independently here and upstream. **Their
+fix is better than mine**: it gates on `!pred_weight_req` — "we are not sending
+an explicit weight table" — rather than on `slice_type == B`, which is more
+direct and covers cases mine would not.
+
+The High-profile fix is the one I got least right. It resolved a real failure on
+`asahi`, but measured in isolation on `asahi-wip` it changes nothing: the
+buffer-sizing work in #581 had already removed that stall, so the mechanism I
+described was not the operative cause on their tree. It is kept here because it
+is still needed on the shipped kernel, not because the root cause writeup below
+is the last word.
+
 ## `0001-avd-h264-weighted-pred.patch`
 
 Fixes H.264 weighted prediction on the Apple Video Decoder. Against

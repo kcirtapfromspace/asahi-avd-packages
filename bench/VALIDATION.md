@@ -271,6 +271,31 @@ ARM container holding only base-devel (170 packages). Both packages build with
 `avd-fw-0.1-1-any.pkg.tar.xz` and
 `libva-v4l2_request-avd-1.3-1-aarch64.pkg.tar.xz`. No undeclared `makedepends`.
 
+## Robustness
+
+Deliberate attempts to break it, all through the installed package.
+
+**Resolutions**, HEVC, including dimensions that are not multiples of 16 — every
+one decoded with hardware and was bit-exact:
+
+| resolution | errors | correctness |
+|---|---|---|
+| 320x240 | 0 | `y:inf` |
+| 640x360 | 0 | `y:inf` |
+| 1282x722 | 0 | `y:inf` |
+| 1920x1080 | 0 | `y:inf` |
+| 1918x1078 | 0 | `y:inf` |
+
+**Malformed input** is handled gracefully rather than hanging or wedging the
+device. A stream truncated to half its length, and a stream with 400 bytes
+flipped at random through the back three quarters, both terminated cleanly — and
+a normal clip decoded with hardware immediately afterwards, so the decoder
+recovers rather than needing a rebind.
+
+**Concurrency**: four simultaneous decoders across mixed codecs (two HEVC, two
+VP9) all ran on hardware with zero errors, on top of the earlier two-stream
+test.
+
 ## Not yet validated
 
 Listed so nobody mistakes this page for a clean bill of health.

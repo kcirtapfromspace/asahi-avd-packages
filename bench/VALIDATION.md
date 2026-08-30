@@ -296,75 +296,77 @@ recovers rather than needing a rebind.
 VP9) all ran on hardware with zero errors, on top of the earlier two-stream
 test.
 
-## Open defect: large frames stall the decoder
+## Open defect: large H.264 frames stall the decoder
 
-**This is what makes H.264 unusable on real video**, and it is unresolved. Every
-real 1080p encode has keyframes well above the threshold, so playback fails on
-frame 0 regardless of profile.
+**This is what makes H.264 unusable on real video**, and it is unresolved after
+four falsified hypotheses. Every real 1080p encode has keyframes large enough to
+hit it, so playback fails on frame 0 regardless of profile.
 
-### Characterisation
+### Behaviour
 
-A single frame above a size threshold causes the hardware to start and never
-finish. The kernel watchdog fires after two seconds:
+The hardware starts a frame and never finishes. The kernel watchdog fires after
+two seconds:
 
 ```
 avd 269080000.avd: Frame processing timed out! Vp: 2 (00)
 ```
 
-Userspace sees `failed waiting on CAPTURE buffer`, then
-`Failed to sync surface ... Input/output error`, and zero frames are produced.
+Userspace sees `failed waiting on CAPTURE buffer`, then `Failed to sync surface
+... Input/output error`, and zero frames are produced.
 
-**The threshold is not a fixed byte count — it shrinks as resolution grows:**
+Measured over **20 runs per clip** on an otherwise idle decoder:
 
-| resolution | largest passing frame | smallest failing frame |
+| clip | keyframe | pass rate |
 |---|---|---|
-| 1920x1080 | 89,293 B | 94,537 B |
-| 1280x720 | 317,274 B | 402,328 B |
+| synthetic 1080p | 89,293 B | 20/20 |
+| synthetic 1080p | 140,275 B | 0/20 |
+| real-world 1080p | 384 KiB | **2/20** |
 
-Reproducible synthetically, so no special footage is needed:
+So it is *mostly* size-correlated and deterministic at the extremes, but not
+purely a threshold — the real-world clip does occasionally succeed. An earlier
+version of this document claimed a byte threshold that "shrinks as resolution
+grows"; that rested on single samples per point and **overstated the evidence**.
+Larger frames raise the failure probability sharply rather than crossing a hard
+limit. Measurements taken while another decode is running are unreliable, so
+contention must be excluded when testing.
+
+**It is H.264-specific.** A real 1080p VP9 clip with a 127 KiB keyframe — larger
+than H.264 sizes that fail every time — decodes cleanly with zero timeouts, in
+ffmpeg and in Chromium. HEVC likewise. So this is not a shared buffer or a
+codec-agnostic hardware limit.
+
+Reproducible synthetically:
 
 ```sh
-ffmpeg -f lavfi -i "testsrc2=size=1920x1080:rate=30:duration=1,noise=alls=8:allf=t" \
-       -c:v libx264 -profile:v main -pix_fmt yuv420p -qp 31 big.mp4
-ffmpeg -hwaccel vaapi -hwaccel_device /dev/dri/renderD128 -i big.mp4 \
-       -frames:v 5 -pix_fmt nv12 -f rawvideo /dev/null
+ffmpeg -y -f lavfi -i "testsrc2=size=1920x1080:rate=30:duration=1,noise=alls=8:allf=t" \
+       -c:v libx264 -profile:v main -pix_fmt yuv420p -qp 31 big.mp4 </dev/null
+ffmpeg -y -hwaccel vaapi -hwaccel_device /dev/dri/renderD128 -i big.mp4 \
+       -frames:v 5 -pix_fmt nv12 -f rawvideo /dev/null </dev/null
 ```
 
-### Ruled out
+### Falsified hypotheses
 
-- **Profile and the 8x8 transform.** Main fails identically to High, and
-  synthetic High content that genuinely uses 8x8 blocks passes.
-- **Content.** Synthetic `testsrc2` with a large keyframe fails exactly like
-  real footage.
-- **Stream structure.** Repeated in-band parameter sets, container remuxing and
-  re-encoding real content with our own settings all make no difference.
-- **The shim's bitstream buffer.** Growth never fires — instrumented counts on a
-  failing decode are `grew=0, overflow=0`, so the OUTPUT buffer already holds
-  the frame.
-- **`pps_tile[0]`.** Raising it from `0x20000` (128 KiB) to 2 MiB changes
-  nothing.
-- **The multi-slice poll path.** `avd-h264.c:752` has a fixed 1 ms
-  `readl_poll_timeout` that looked like a strong candidate, but it only runs for
-  frames flagged `M2M_HOLD_CAPTURE_BUF`, and the failing frames are
-  **single-slice**, so that code never executes.
+Each was built, loaded and measured, not merely reasoned about:
 
-### Where to look next
+1. **Profile / 8x8 transform.** Main fails identically to High; synthetic High
+   genuinely using 8x8 blocks passes.
+2. **`pps_tile[0]` sizing.** Raising it from `0x20000` to 2 MiB: no change.
+3. **The multi-slice poll** at `avd-h264.c:752` (fixed 1 ms
+   `readl_poll_timeout`). The failing frames are **single-slice**, so that branch
+   never executes.
+4. **Lost mailbox interrupt.** `avd-drv.c:188` retrieves before acknowledging,
+   and with `IRQF_ONESHOT` a message arriving in that window could have its
+   not-empty condition wiped. Reordering the ack before the retrieve changed
+   nothing: 0/20 before, 0/20 after.
 
-That the limit tightens as resolution grows points at working buffers carved out
-of the CAPTURE allocation rather than a standalone bitstream limit.
-`avd_h264_run_preamble()` computes both the RVRA and SPS addresses backwards
-from the end of the destination buffer:
+Also ruled out: content (synthetic reproduces it), stream structure (repeated
+in-band parameter sets, remuxing, re-encoding with our own settings), and the
+shim's bitstream buffer (growth never fires — `grew=0, overflow=0`).
 
-```c
-sps_len = sps_size(fmt_width(ctx), fmt_height(ctx));
-run->addresses.rvra = run->addresses.y + (dst_len - sps_len - ctx->rvra.size);
-run->addresses.sps  = run->addresses.y + (dst_len - sps_len);
-```
+### Still unexamined
 
-and `avd-v4l2.c:81` adds `ctx->rvra.size` onto the CAPTURE `sizeimage`. If the
-hardware's per-frame scratch grows with coded size and runs into that region,
-both the inverse relationship with resolution and the silent stall would follow.
-Not verified.
+`avd-hw.c` and `avd-regs.h` — the DMA and register programming — have not been
+read closely. That is where I would look next.
 
 ## Not yet validated
 

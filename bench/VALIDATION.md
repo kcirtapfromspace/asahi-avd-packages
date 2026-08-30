@@ -167,6 +167,35 @@ Firefox (`extra/firefox` 154.0.1) is not installed here and remains untested;
 it is a separate question, and its RDD sandbox needs `MOZ_DISABLE_RDD_SANDBOX=1`
 regardless.
 
+## Resolution, frame size, seeking and concurrency
+
+**4K works** — but only for HEVC unconditionally. The H.264 failure tracks
+**compressed frame size**, not resolution:
+
+| clip | avg frame | decoder errors |
+|---|---|---|
+| 4K HEVC Main, 15 Mbps | — | 0 |
+| 4K H.264 Main, 4 Mbps | 18.0 KiB | 0 |
+| 4K H.264 Main, 8 Mbps | 32.4 KiB | 5 |
+| 4K H.264 Main, 20 Mbps | 62.7 KiB | 4 |
+
+That matches 1080p, which is clean at 4 Mbps and starts erroring at 8 Mbps, and
+puts the threshold somewhere around 20–30 KiB per compressed frame regardless of
+resolution.
+
+The mechanism is a **2 second poll timeout** waiting for an OUTPUT buffer to be
+dequeued (`decode.c:350`), i.e. a decode that never completes rather than one
+that is merely slow. The shim's OUTPUT buffer growth path is **not** involved —
+instrumented counts over a failing run were `grew=0, overflow=0, failed_wait=1`,
+so the bitstream buffer is never outgrown. Failures are intermittent (1–11 per
+run on the same clip). Root cause not established; it is below the shim, in the
+driver or the hardware, and is a separate defect from the High-profile failure.
+
+**Seeking and concurrency are clean.** Loop/seek playback exercising the decoder
+reset path reported zero errors, and two simultaneous decoders on the one device
+— an H.264 and an HEVC stream at once — both ran with hardware decode and no
+errors.
+
 ## Not yet validated
 
 Listed so nobody mistakes this page for a clean bill of health.
@@ -175,9 +204,6 @@ Listed so nobody mistakes this page for a clean bill of health.
   above.)
 - **Real-world content.** Every clip above is synthetic `testsrc2`. No real
   camera footage, film grain, interlacing, or varied GOP structures.
-- **4K.** Untested, though Asahi's own announcement mentions 4K H.264.
-- **Seeking and non-linear playback**, which exercise decoder reset paths.
-- **Concurrent decoders** — two players at once, contending for the device.
 - **Long-running stability.** Nothing here ran longer than 60 seconds.
 - **Installed-package behaviour.** All testing used `LIBVA_DRIVERS_PATH`
   against a build tree; the packaged `asahi_drv_video.so` alias and the

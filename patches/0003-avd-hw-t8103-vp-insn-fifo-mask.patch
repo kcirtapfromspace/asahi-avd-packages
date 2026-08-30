@@ -1,0 +1,16 @@
+--- a/drivers/media/platform/apple/avd/avd-hw.c
++++ b/drivers/media/platform/apple/avd/avd-hw.c
+@@ -78,7 +78,14 @@
+ static void t8103_configure_stream(struct avd_dev *avd, u32 fifo_idx,
+ 				   enum avd_codec codec)
+ {
+-	w32(AVD_V3_VP_INSN_FIFO_MASK + (fifo_idx * 4), 0x100000);
++	/*
++	 * fifo_size() allocates 0x100000 * 12, so a 0x100000 limit here does
++	 * not describe the buffer it points at: a frame whose instruction
++	 * stream exceeds 1 MiB wraps inside a 12 MiB allocation and the
++	 * hardware never signals completion, leaving the watchdog to fire.
++	 * t8112 and t8122 program 0 in the equivalent register; do the same.
++	 */
++	w32(AVD_V3_VP_INSN_FIFO_MASK + (fifo_idx * 4), 0);
+ }

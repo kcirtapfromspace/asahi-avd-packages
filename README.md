@@ -73,65 +73,29 @@ separate block that upstream lists as not currently being worked on.
 Playing 720p clips through mpv over VA-API, counting decoder errors across the
 whole file rather than sampling the first lines of output:
 
-| Codec | Result |
+| Codec | Stock kernel | With the patches in `patches/` |
+|---|---|---|
+| H.264 Main | small frames only | **works, bit-exact** |
+| H.264 High | fails | **works, bit-exact** |
+| HEVC Main | works | works, bit-exact |
+| VP9 Profile 0 / 2 | works | works, bit-exact |
+| AV1 | not supported by M1/M2 hardware | not supported |
+
+### H.264 needs three kernel patches
+
+H.264 works, but only with the patches in [`patches/`](patches/). Without them
+it is unusable: High profile falls back to software, and any real 1080p keyframe
+stalls the decoder outright. HEVC and VP9 need none of them.
+
+| patch | fixes |
 |---|---|
-| H.264 Main | works |
-| **H.264 High** | **fails** — falls back to software |
-| HEVC Main | works |
-| VP9 Profile 0 | works |
+| `0001` weighted prediction | luma off by ~54 dB when a stream uses weighted P |
+| `0002` High profile | decode stalls; High is what all real H.264 uses |
+| `0003` t8103 FIFO mask | any frame above ~1 MiB of instructions stalls — every real keyframe |
 
-### The H.264 High profile problem
-
-This is the significant caveat, and it is worth stating plainly: **High is the
-profile essentially all real-world H.264 uses.** Bisected against Main at
-matched frame sizes, so it is the profile and not the bitrate or the
-resolution:
-
-| clip | profile | avg frame | decoder errors |
-|---|---|---|---|
-| `main_small` | Main | 12.4 KiB | 0 |
-| `high_small` | High | 12.6 KiB | 105 |
-| `main_big` | Main | 14.2 KiB | 0 |
-| `high_big` | High | 14.5 KiB | 75 |
-
-The VA-API path reports `failed waiting on OUTPUT buffer` and mpv falls back to
-software. GStreamer's `v4l2slh264dec` fails on the same content earlier, in
-`gst_v4l2_codec_h264_dec_ensure_bitstream`, with `Not enough memory to decode
-H264 stream`. Both paths break on High and both work on Main, so this is below
-the packages in this repo — in the shim, the kernel driver, or the firmware.
-Not yet root-caused.
-
-At 1080p Main the decoder is clean at 2 and 4 Mbps but starts reporting
-occasional `failed waiting on OUTPUT buffer` at 8 Mbps, which may be the same
-underlying problem showing up as a function of compressed frame size.
-
-HEVC and VP9 have no equivalent failure, and between them cover a large share
-of modern streaming video.
-
-### H.264 weighted prediction (fixed — kernel patch)
-
-H.264 decoding is specified to be bit-exact. Comparing hardware output against
-libavcodec frame by frame, HEVC and VP9 pass exactly — and so does H.264, until
-the stream uses weighted prediction, at which point luma diverges by about
-54 dB while chroma stays exact:
-
-| encoder settings (x264, profile Main, -bf 3) | luma PSNR |
-|---|---|
-| `weightp=0` | `inf` (bit-exact) |
-| `weightp=2` | 53.95 dB |
-
-**Root-caused and fixed** — see [`patches/`](patches/). The driver applied
-`weighted_bipred_idc`, which governs B slices only, to P slices as well: that
-set the implicit-bipred flag (telling the hardware to disregard the explicit
-weight table) and overrode the real weight denominators. Gating it on
-`slice_type == B` restores bit-exact decoding, verified by per-frame PSNR
-against libavcodec, with a non-weighted stream as a regression control.
-
-Chroma escapes only because x264's `weightp` weights luma and leaves chroma
-neutral. The effect is content-dependent: it needs a macroblock that actually
-references a weighted reference index, so many `weightp` streams still decode
-bit-exact. The error is 1 LSB, visually imperceptible, deterministic — but
-non-conformant. Full method and proof in
+All three verified bit-exact against libavcodec, with HEVC and VP9 unregressed.
+Full root causes, measurements and falsified hypotheses in
+[`patches/README.md`](patches/README.md) and
 [`bench/VALIDATION.md`](bench/VALIDATION.md).
 
 ### Known gap: `--vo=dmabuf-wayland`

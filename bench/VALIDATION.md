@@ -296,77 +296,39 @@ recovers rather than needing a rebind.
 VP9) all ran on hardware with zero errors, on top of the earlier two-stream
 test.
 
-## Open defect: large H.264 frames stall the decoder
+## Large H.264 frames stalled the decoder — FIXED
 
-**This is what makes H.264 unusable on real video**, and it is unresolved after
-four falsified hypotheses. Every real 1080p encode has keyframes large enough to
-hit it, so playback fails on frame 0 regardless of profile.
+See [`patches/0003-avd-hw-t8103-vp-insn-fifo-mask.patch`](../patches/).
 
-### Behaviour
+`t8103_configure_stream()` programmed the VP instruction FIFO limit to `0x100000`
+(1 MiB) while `fifo_size()` allocates 12 MiB. Frames whose instruction stream
+exceeded 1 MiB wrapped inside the larger buffer and the hardware never signalled
+completion. t8112 and t8122 program `0`; only t8103 carried the stale value.
 
-The hardware starts a frame and never finishes. The kernel watchdog fires after
-two seconds:
+Swept as a module parameter, 10 runs per value per clip:
 
-```
-avd 269080000.avd: Frame processing timed out! Vp: 2 (00)
-```
+| fifo_mask | small frame | large frame | real-world |
+|---|---|---|---|
+| `0x100000` (stock) | 10/10 | **0/10** | **1/10** |
+| `0` | 10/10 | 10/10 | 10/10 |
+| `0xc00000` | 10/10 | 10/10 | 10/10 |
 
-Userspace sees `failed waiting on CAPTURE buffer`, then `Failed to sync surface
-... Input/output error`, and zero frames are produced.
+With the fix, real-world H.264 is bit-exact against libavcodec, as are the big
+keyframe, small control, weighted-prediction, HEVC and VP9 clips.
 
-Measured over **20 runs per clip** on an otherwise idle decoder:
+Found by exploiting a codec asymmetry: a real 1080p VP9 clip with a 127 KiB
+keyframe decoded cleanly while H.264 failed 20/20 at 140 KiB, which ruled out
+shared buffers and pointed at per-codec register programming. Five hypotheses
+were falsified by measurement before it: the 8x8 transform path, `pps_tile[0]`
+sizing, the multi-slice `readl_poll_timeout`, a lost mailbox interrupt under
+`IRQF_ONESHOT`, and the H.264-only slice-offset scan.
 
-| clip | keyframe | pass rate |
-|---|---|---|
-| synthetic 1080p | 89,293 B | 20/20 |
-| synthetic 1080p | 140,275 B | 0/20 |
-| real-world 1080p | 384 KiB | **2/20** |
+### Latent bug noticed in passing
 
-So it is *mostly* size-correlated and deterministic at the extremes, but not
-purely a threshold — the real-world clip does occasionally succeed. An earlier
-version of this document claimed a byte threshold that "shrinks as resolution
-grows"; that rested on single samples per point and **overstated the evidence**.
-Larger frames raise the failure probability sharply rather than crossing a hard
-limit. Measurements taken while another decode is running are unreliable, so
-contention must be excluded when testing.
-
-**It is H.264-specific.** A real 1080p VP9 clip with a 127 KiB keyframe — larger
-than H.264 sizes that fail every time — decodes cleanly with zero timeouts, in
-ffmpeg and in Chromium. HEVC likewise. So this is not a shared buffer or a
-codec-agnostic hardware limit.
-
-Reproducible synthetically:
-
-```sh
-ffmpeg -y -f lavfi -i "testsrc2=size=1920x1080:rate=30:duration=1,noise=alls=8:allf=t" \
-       -c:v libx264 -profile:v main -pix_fmt yuv420p -qp 31 big.mp4 </dev/null
-ffmpeg -y -hwaccel vaapi -hwaccel_device /dev/dri/renderD128 -i big.mp4 \
-       -frames:v 5 -pix_fmt nv12 -f rawvideo /dev/null </dev/null
-```
-
-### Falsified hypotheses
-
-Each was built, loaded and measured, not merely reasoned about:
-
-1. **Profile / 8x8 transform.** Main fails identically to High; synthetic High
-   genuinely using 8x8 blocks passes.
-2. **`pps_tile[0]` sizing.** Raising it from `0x20000` to 2 MiB: no change.
-3. **The multi-slice poll** at `avd-h264.c:752` (fixed 1 ms
-   `readl_poll_timeout`). The failing frames are **single-slice**, so that branch
-   never executes.
-4. **Lost mailbox interrupt.** `avd-drv.c:188` retrieves before acknowledging,
-   and with `IRQF_ONESHOT` a message arriving in that window could have its
-   not-empty condition wiped. Reordering the ack before the retrieve changed
-   nothing: 0/20 before, 0/20 after.
-
-Also ruled out: content (synthetic reproduces it), stream structure (repeated
-in-band parameter sets, remuxing, re-encoding with our own settings), and the
-shim's bitstream buffer (growth never fires — `grew=0, overflow=0`).
-
-### Still unexamined
-
-`avd-hw.c` and `avd-regs.h` — the DMA and register programming — have not been
-read closely. That is where I would look next.
+H.264 has no `data_byte_offset` field (HEVC does), so `stream_slice()` re-derives
+the offset by scanning for emulation-prevention bytes with an unbounded
+`data[off]` read. Measured correct on every clip tested, so it is not this
+defect, but it is an out-of-bounds read worth reporting separately.
 
 ## Not yet validated
 

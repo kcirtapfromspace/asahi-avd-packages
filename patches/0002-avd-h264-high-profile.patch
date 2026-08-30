@@ -1,0 +1,25 @@
+--- a/drivers/media/platform/apple/avd/avd-h264.c
++++ b/drivers/media/platform/apple/avd/avd-h264.c
+@@ -299,7 +299,21 @@
+ 	if (!(decode->flags & V4L2_H264_DECODE_PARAM_FLAG_IDR_PIC))
+ 		stream_refs(ctx, run);
+ 
+-	if (pps->flags & V4L2_H264_PPS_FLAG_SCALING_MATRIX_PRESENT)
++	/*
++	 * hdr_2c_sps_param above advertises transform_8x8_mode to the hardware,
++	 * which then expects the scaling section - including the 8x8 lists -
++	 * to follow. pic_scaling_matrix_present_flag only says whether the
++	 * stream *signalled* matrices, not whether the hardware needs them.
++	 * A High profile stream with transform_8x8_mode_flag=1 and
++	 * pic_scaling_matrix_present_flag=0 is the common x264 default, and
++	 * skipping the section for it left the hardware waiting for data that
++	 * never arrived, stalling the decode until the client timed out. The
++	 * scaling matrix control carries the effective (flat) lists in that
++	 * case, so streaming it is correct.
++	 */
++	if (run->scaling_matrix &&
++	    (pps->flags & (V4L2_H264_PPS_FLAG_SCALING_MATRIX_PRESENT |
++			   V4L2_H264_PPS_FLAG_TRANSFORM_8X8_MODE)))
+ 		stream_scaling(ctx, run);
+ 	else
+ 		push(0, "cm3_mark_end_section_scl");

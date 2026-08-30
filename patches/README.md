@@ -64,3 +64,83 @@ reference and the hardware are each deterministic.
 
 The change is confined to `stream_weights()`, which is H.264-only; HEVC and VP9
 do not reach this code and were already bit-exact.
+
+## `0002-avd-h264-high-profile.patch`
+
+Fixes H.264 High profile, which is what essentially all real-world H.264 uses.
+
+`stream_hdr()` advertises `transform_8x8_mode` to the hardware, which then
+expects the scaling section — including the 8x8 lists — to follow. But that
+section was gated on `pic_scaling_matrix_present_flag`, which says only whether
+the stream *signalled* matrices, not whether the hardware needs them. A stream
+with `transform_8x8_mode_flag=1` and `pic_scaling_matrix_present_flag=0` — x264's
+High profile default — got an end-of-section marker instead of data, and the
+hardware stalled waiting for what never arrived.
+
+`stream_scaling()` already contained `default_8x8_intra`/`default_8x8_inter`
+fallback tables; they were simply unreachable. The scaling matrix control carries
+the effective (flat) lists in this case, so streaming it is correct.
+
+Verified bit-exact at 720p and 1080p, 30 and 60 fps, with Main, weighted-Main,
+HEVC and VP9 unregressed.
+
+## `0003-avd-hw-t8103-vp-insn-fifo-mask.patch`
+
+Fixes large-frame H.264 decode on M1 (t8103). This is the one that makes H.264
+usable on real video.
+
+### The bug
+
+Any H.264 frame whose coded size was large enough — every real 1080p keyframe —
+made the hardware start and never finish, with the watchdog firing after two
+seconds (`Frame processing timed out!`) and zero frames produced. HEVC and VP9
+were unaffected even at larger frame sizes.
+
+### Root cause
+
+`t8103_configure_stream()` programs the VP instruction FIFO limit to `0x100000`
+(1 MiB), while `fifo_size()` allocates `0x100000 * 12` (12 MiB). The limit does
+not describe the buffer it points at. A frame whose instruction stream exceeds
+1 MiB wraps inside the much larger allocation, and the hardware never signals
+completion. t8112 and t8122 program `0` in the equivalent register; only t8103
+carries the stale value, and the defect is M1-specific.
+
+### How it was found
+
+By exploiting a codec asymmetry: a real 1080p VP9 clip with a **127 KiB**
+keyframe decoded cleanly while H.264 failed 20/20 at **140 KiB**. That ruled out
+shared buffers and codec-agnostic limits, and pointed at per-codec register
+programming — which led to `avd-hw.c`, where t8103 is the only variant setting a
+nonzero mask.
+
+Five hypotheses were falsified by measurement first: the 8x8 transform path,
+`pps_tile[0]` sizing, the multi-slice `readl_poll_timeout`, a lost mailbox
+interrupt under `IRQF_ONESHOT`, and the H.264-only slice-offset scan.
+
+### Verification
+
+`fifo_mask` swept as a module parameter, 10 runs per value per clip:
+
+| fifo_mask | small frame | large frame | real-world |
+|---|---|---|---|
+| `0x100000` (stock) | 10/10 | **0/10** | **1/10** |
+| `0` | 10/10 | 10/10 | 10/10 |
+| `0xc00000` (12 MiB) | 10/10 | 10/10 | 10/10 |
+| `0x800000` | 10/10 | 10/10 | 10/10 |
+
+Output correctness against libavcodec, with both `0` and `0xc00000` — all
+bit-exact:
+
+| stream | PSNR |
+|---|---|
+| H.264 real-world 1080p | `y:inf u:inf v:inf` |
+| H.264 big keyframe | `y:inf u:inf v:inf` |
+| H.264 small (control) | `y:inf u:inf v:inf` |
+| H.264 Main weighted | `y:inf u:inf v:inf` |
+| HEVC real-world | `y:inf u:inf v:inf` |
+| VP9 real-world | `y:inf u:inf v:inf` |
+
+`0` is proposed rather than `0xc00000` because matching the other variants is a
+smaller and more clearly correct claim than asserting what the register means on
+undocumented hardware. Both work; `0x100000` appears to be a stale bring-up
+constant from when the FIFO allocation was smaller.

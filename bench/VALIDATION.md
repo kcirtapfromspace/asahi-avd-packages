@@ -127,45 +127,40 @@ frames** while exiting 0, and segfaulted once (core dump captured, SIGSEGV in
 without `-hwaccel_output_format` — works and yields all frames. Worth chasing;
 the explicit-surface path is what most transcoding scripts use.
 
-## Chromium cannot use this at all on Arch Linux ARM
+## Chromium: works for VP9 and HEVC, needs a flag
 
-Tested because browsers are the main reason anyone wants hardware decode. On
-this system Chromium never loads the driver — and it cannot:
+**Corrected.** An earlier version of this section claimed Chromium could not use
+the decoder on Arch Linux ARM at all. That was generalised from H.264 and is
+wrong.
 
-```console
-$ readelf -d /usr/lib/chromium/chromium | grep NEEDED | grep -i va
-    (nothing; libdrm.so.2 is there, libva is not)
-$ strings /usr/lib/chromium/chromium | grep -c libva
-0
+`extra/chromium` is built with `use_v4l2_codec=true` / `use_vaapi=false`
+([archlinuxarm/PKGBUILDs#2193](https://github.com/archlinuxarm/PKGBUILDs/pull/2193)),
+so it does not use the VA-API driver in this repo — it talks to `/dev/video1`
+directly. It still depends on `avd-fw`, without which the device does not exist.
+
+Hardware decode is opt-in. With the flags from that PR:
+
+```
+--enable-features=AcceleratedVideoDecoder,AcceleratedVideoDecodeLinuxGL,AcceleratedVideoDecodeLinuxZeroCopyGL
 ```
 
-**VA-API is compiled out of the `extra/chromium` aarch64 build** (Chromium
-151.0.7922.137). Confirmed at runtime as well: with a video playing, no
-Chromium process — including the GPU process — maps `libva.so`, let alone this
-driver, and `Media.VideoDecoderFallback.H264` is recorded. No combination of
-`--enable-features=VaapiVideoDecoder,AcceleratedVideoDecodeLinuxGL` changes
-that, because the code is not in the binary.
+stock `chromium` 151.0.7922.137 holds `/dev/video1` and `/dev/media1` open while
+playing **VP9** and **HEVC**. Confirmed by inspecting `/proc/<pid>/fd` of every
+Chromium process during playback.
 
-So on Arch Linux ARM today the practical beneficiaries are mpv, ffmpeg and
-GStreamer. Getting `use_vaapi=true` into the ALARM Chromium build is a separate
-and probably higher-impact contribution than anything in this repo.
+**H.264 is the exception.** `v4l2_video_decoder_delegate_h264.cc:617` hardcodes
+`V4L2_STATELESS_H264_DECODE_MODE_FRAME_BASED` and never queries the driver. AVD
+is slice-based only (`min == max`), so the ioctl returns `ERANGE` and H.264 falls
+back to software. The VP9 and HEVC delegates contain no `DECODE_MODE` reference
+at all, which is why they work. Fixing H.264 needs an upstream Chromium change.
 
-It is worse than a missing build flag. ALARM's PKGBUILD sets
-`use_vaapi=false` **and** `use_v4l2_codec=true` — a deliberate choice, noted in
-the file header as "disable vaapi, enable v4l2". The V4L2 stateless stack really
-is compiled in (`V4L2StatelessVideoDecoderBackend`,
-`V4L2VideoDecoderBackendStateless` are all present in the binary), and V4L2
-stateless is exactly what AVD speaks. But no Chromium process ever opens
-`/dev/video*`, with or without
-`--enable-features=AcceleratedVideoDecodeLinuxGL,AcceleratedVideoDecodeLinuxZeroCopyGL`
-and `--ignore-gpu-blocklist`. The path appears to be reachable only on ChromeOS.
+**AV1** is not supported by M1/M2 silicon, so YouTube's default streams decode in
+software regardless. Blocking AV1 falls back to VP9, which is accelerated.
 
-So Chromium on Arch Linux ARM currently has no working hardware decode route at
-all: VA-API compiled out, V4L2 compiled in but unreachable.
-
-Firefox (`extra/firefox` 154.0.1) is not installed here and remains untested;
-it is a separate question, and its RDD sandbox needs `MOZ_DISABLE_RDD_SANDBOX=1`
-regardless.
+A locally built `use_vaapi=true` Chromium was verified working and additionally
+covers H.264, but requesting one from ALARM was dropped: it would gain H.264 in
+the browser at the cost of a second build of one of their most expensive
+packages, and it would forfeit the V4L2 path that serves every other ARM board.
 
 ## Resolution, frame size, seeking and concurrency
 
